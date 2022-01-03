@@ -3,6 +3,8 @@ var shadowFields = [];
 var popup = null, inputs = null, backTestWrapper = null;
 var item = 0;
 var cancel = false;
+var goSequential = false;
+var cycle = 15000;
 
 
 chrome.storage.local.get(['fields'], startTesting);
@@ -11,7 +13,7 @@ chrome.runtime.onMessage.addListener(onMessageReceived);
 
 
 function onMessageReceived(message, sender, sendResponse) {
-    
+
     if (message.hasOwnProperty('cancel')) cancel = true;
 }
 
@@ -51,10 +53,14 @@ async function startTesting({ fields }) {
 
             let { fieldNo, start, end, step } = f;
 
-            let info = {                
+            let info = {
                 inputField: inputs[fieldNo - 1],
                 fieldNo, start, end, step,
                 current: start,
+                randomize() {
+                    let value = getRandom(this.start, this.end);
+                    this.current = Number.isInteger(this.step) ? Math.floor(value) : value;
+                },
                 incrementCurrent() {
 
                     this.current += this.step;
@@ -72,29 +78,60 @@ async function startTesting({ fields }) {
 
         }
 
-        let totalSteps = findTotalSteps();
+
         let bestSofar = { value: null, message: null };
 
-        for (let i = 1; i <= totalSteps; i++) {
+        let totalSteps = findTotalSteps();
 
-            chrome.runtime.sendMessage({ message: `${i} of ${totalSteps} steps running` });
+        if (goSequential) {
 
-            if (i > 1) await fieldsInfo[fieldsInfo.length - 1].incrementCurrent();
+            for (let i = 1; i <= totalSteps; i++) {
 
-            await reflectChanges();
+                chrome.runtime.sendMessage({ message: `${i} of ${totalSteps} steps running` });
 
-            let message = fieldsInfo.map(fi => `${fi.fieldNo} -> ${fi.current.toFixed(2)}`).join(' | ');
+                if (i > 1) await fieldsInfo[fieldsInfo.length - 1].incrementCurrent();
 
-            let result = getValue(item);
+                await reflectChanges();
 
-            //console.log(`result -> ${result}`);
+                let message = fieldsInfo.map(fi => `${fi.fieldNo} -> ${fi.current.toFixed(2)}`).join(' | ');
 
-            if (!bestSofar.value || result >= bestSofar.value) {
-                bestSofar.value = result;
-                bestSofar.message = message;
+                let result = getValue(item);
+
+                //console.log(`result -> ${result}`);
+
+                if (!bestSofar.value || result >= bestSofar.value) {
+                    bestSofar.value = result;
+                    bestSofar.message = message;
+                }
+
+                if (cancel) break;
+
             }
 
-            if (cancel) break;
+        }
+        else {
+
+            for (let i = 1; i <= cycle; i++) {
+
+                chrome.runtime.sendMessage({ message: `${i} of ${cycle} steps running` });
+
+                fieldsInfo.forEach(f => f.randomize());
+
+                await reflectChanges();
+
+                let message = fieldsInfo.map(fi => `${fi.fieldNo} -> ${fi.current.toFixed(2)}`).join(' | ');
+
+                let result = getValue(item);
+
+                if (!bestSofar.value || result >= bestSofar.value) {
+                    bestSofar.value = result;
+                    bestSofar.message = message;
+                }
+
+                if (cancel) break;
+
+
+            }
 
         }
 
@@ -151,16 +188,27 @@ async function trueDelay(limit) {
     let oValue = getValue(item);
     let timeElapsed = 0, nValue = null, interval = 10;
 
-    do {      
-        await delay(interval); timeElapsed += interval; 
+    do {
+        await delay(interval); timeElapsed += interval;
         nValue = getValue(item);
     }
-    while(timeElapsed <= limit  && oValue == nValue);
+    while (timeElapsed <= limit && oValue == nValue);
 
     //console.log(timeElapsed);
 }
 
 function getValue(option) {
-    let rawText = backTestWrapper.querySelector('.report-data').children[option].firstElementChild.innerText;
-    return parseFloat(rawText);
+
+    try {
+        let rawText = backTestWrapper.querySelector('.report-data').children[option].firstElementChild.innerText;
+        return parseFloat(rawText);
+    }
+    catch (error) {
+        return 0.0;
+    }
+
 }
+
+function getRandom(start, end) {
+    return start + (Math.random() * (end - start));
+} 
